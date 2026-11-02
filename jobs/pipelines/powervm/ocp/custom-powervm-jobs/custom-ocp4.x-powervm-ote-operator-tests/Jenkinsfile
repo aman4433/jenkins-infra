@@ -14,6 +14,7 @@ pipeline {
         string(defaultValue: '', description: 'Optional OCP build (quay image). Empty = latest stable build of the release, or latest build if there is no stable yet', name: 'Build')
         choice(description: 'Operator to test (must exist in scripts/operator/ote/operators.conf)', choices: ['kube-descheduler'], name: 'Operator')
         string(defaultValue: '', description: 'OTE suite to run. Empty = the default suite for the operator in operators.conf', name: 'Suite')
+        string(defaultValue: '', description: 'Optional regex to run only matching tests from the suite, e.g. "metrics|ServiceMonitor". Empty = all tests', name: 'TestFilter')
         string(defaultValue: '30', description: 'Minutes to keep the cluster after the tests', name: 'KeepFor')
         string(defaultValue: 'ocp-qe-operators', description: 'PowerVC host group', name: 'HostGroup')
         string(defaultValue: 'cicd-rhel9.8-2026-08-11-ppc64le', description: 'PowerVC image name for the bastion', name: 'BastionImage')
@@ -48,6 +49,7 @@ pipeline {
         BUILD = "${params.Build}"
         OPERATOR_NAME = "${params.Operator}"
         OTE_SUITE = "${params.Suite}"
+        OTE_TEST_FILTER = "${params.TestFilter}"
         TIMEOUT = "${params.KeepFor}"
         CONFIG_TYPE = "min"
     }
@@ -161,7 +163,7 @@ pipeline {
                         '''
                     }
                     catch (err) {
-                        echo 'OTE suite failed!'
+                        echo 'OTE tests failed, see the Test Result tab'
                         env.FAILED_STAGE = env.STAGE_NAME
                         currentBuild.result = 'UNSTABLE'
                     }
@@ -182,7 +184,8 @@ pipeline {
     }
     post {
         always {
-            archiveAllArtifacts("deploy/ote/ote-run.log", "deploy/ote/suites.txt", "deploy/vars.tfvars")
+            junit(allowEmptyResults: true, testResults: 'deploy/ote/junit.xml')
+            archiveAllArtifacts("deploy/ote/junit.xml", "deploy/ote/summary.tsv", "deploy/ote/tests.txt", "deploy/ote/suites.txt", "deploy/ote/results.tar.gz")
             cleanupOcp4Cluster()
             checkInfraError()
             script {
