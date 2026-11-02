@@ -1,0 +1,198 @@
+@Library('jenkins-upstream-library') _
+// Deploys an OCP UPI cluster on the on-prem PowerVC (scnlonprem), extracts an operator's
+// OTE test binary from its image and runs one suite. Operator details: scripts/operator/ote/operators.conf
+pipeline {
+    agent {
+        docker {
+            image 'quay.io/powercloud/inbound-agent:3256.v88a_f6e922152-2-jdk17.1'
+            args '-v /etc/resolv.conf:/etc/resolv.conf'
+            label 'jump-vpc-x86_64'
+        }
+    }
+    parameters {
+        choice(description: 'OpenShift release', choices: ['4.22','4.23','5.0','4.21','4.20'], name: 'Release')
+        string(defaultValue: '', description: 'Optional OCP build (quay image). Empty = latest stable build of the release, or latest build if there is no stable yet', name: 'Build')
+        choice(description: 'Operator to test (must exist in scripts/operator/ote/operators.conf)', choices: ['kube-descheduler'], name: 'Operator')
+        string(defaultValue: '', description: 'OTE suite to run. Empty = the default suite for the operator in operators.conf', name: 'Suite')
+        string(defaultValue: '30', description: 'Minutes to keep the cluster after the tests', name: 'KeepFor')
+        string(defaultValue: 'ocp-qe-operators', description: 'PowerVC host group', name: 'HostGroup')
+        string(defaultValue: 'cicd-rhel9.8-2026-08-11-ppc64le', description: 'PowerVC image name for the bastion', name: 'BastionImage')
+        string(defaultValue: 'cicd-rhcos-9-8-20260520-0-ppc64le-powervs', description: 'PowerVC image name for RHCOS nodes', name: 'RhcosImage')
+    }
+    environment {
+        //users and credentials. All must be defined in Jenkins Credentials
+        GITHUB_USER = credentials('PUBLIC_GITHUB_USER')
+        GITHUB_TOKEN = credentials('PUBLIC_GITHUB_TOKEN')
+        OS_USERNAME = credentials('OS_USERNAME')
+        OS_PASSWORD = credentials('OS_PASSWORD')
+        REDHAT_USERNAME = credentials('REDHAT_USERNAME')
+        REDHAT_PASSWORD = credentials('REDHAT_PASSWORD')
+        PULL_SECRET = credentials('PULL_SECRET')
+
+        //Env constants
+        POWERVC_CLOUD = "scnlonprem"
+        HARDWARE_CHOSE = "P9"
+        TERRAFORM_VER = "1.9.2"
+        TARGET = "deploy-openshift4-powervc"
+        TEMPLATE_FILE = ".${TARGET}.tfvars.template"
+        POWERVS = false
+        SCRIPT_DEPLOYMENT = false
+        WAIT_FOR_DEBUG = "1"
+        OPENSHIFT_POWERVC_GIT_TF_DEPLOY_BRANCH = "main"
+        ENABLE_E2E_TEST = "false"
+        ENABLE_SCALE_TEST = "false"
+        KDUMP_ENABLE = "false"
+
+        //Parameters
+        OCP_RELEASE = "${params.Release}"
+        BUILD = "${params.Build}"
+        OPERATOR_NAME = "${params.Operator}"
+        OTE_SUITE = "${params.Suite}"
+        TIMEOUT = "${params.KeepFor}"
+        CONFIG_TYPE = "min"
+    }
+    stages {
+        stage('Setup Common Environment Variables') {
+            steps {
+                setupCommonEnvironmentVariables()
+                setupClusterConfig("${CONFIG_TYPE}")
+                script {
+                    // Settings for the OCP QE operator host group on scnlonprem
+                    env.AVAILABILITY_ZONE = params.HostGroup
+                    env.SCG_ID = "993a1363-d689-4796-82fb-77ee34e9fa10"           // "Any host, all VIOS" (NPIV)
+                    env.VOLUME_STORAGE_TEMPLATE = "ltc10u20-fs9100 base template"
+                    env.STORAGE_TYPE = "nfs"
+                    env.MOUNT_ETCD_RAMDISK = "false"
+                    env.INSTANCE_NAME = "ote-${env.OCP_RELEASE.replaceAll('\\.', '')}"
+                    env.BASTION_MEMORY = "16"
+                }
+            }
+        }
+        stage('pull artifact') {
+            steps {
+                script {
+                    getArtifacts("mirror-openshift-release", "latest-${OCP_RELEASE}-build.txt")
+                    getArtifacts("mirror-openshift-release", "latest-${OCP_RELEASE}-stable-build.txt")
+                }
+            }
+        }
+        stage('Prepare Terraform Template') {
+            steps {
+                script {
+                    ansiColor('xterm') {
+                        echo ""
+                    }
+                    try {
+                        gbToMb()
+                        pullSecret()
+                        if (env.BUILD?.trim()) {
+                            env.OPENSHIFT_IMAGE = env.BUILD.trim()
+                        }
+                        else if (fileExists("deploy/artifactory/latest-${OCP_RELEASE}-stable-build.txt") &&
+                                 readFile("deploy/artifactory/latest-${OCP_RELEASE}-stable-build.txt").trim()) {
+                            env.OPENSHIFT_IMAGE = readFile("deploy/artifactory/latest-${OCP_RELEASE}-stable-build.txt").trim()
+                        }
+                        else if (fileExists("deploy/artifactory/latest-${OCP_RELEASE}-build.txt")) {
+                            env.OPENSHIFT_IMAGE = readFile("deploy/artifactory/latest-${OCP_RELEASE}-build.txt").trim()
+                        }
+                        else {
+                            error "No build found for ${OCP_RELEASE}. Check the mirror-openshift-release job or pass Build"
+                        }
+                        env.OCP_RELEASE_TAG = env.OPENSHIFT_IMAGE.split(":")[1].trim()
+                        env.BUILD = env.OCP_RELEASE_TAG
+
+                        // Resolve image IDs by name in the job's PowerVC project
+                        env.BASTION_IMAGE_NAME = params.BastionImage
+                        env.RHCOS_IMAGE_NAME = params.RhcosImage
+                        env.BASTION_IMAGE_ID = sh(returnStdout: true, script: "set +x; openstack --os-auth-url \"${env.OS_AUTH_URL}\" --insecure image show \"${params.BastionImage}\" -f value -c id").trim()
+                        env.RHCOS_IMAGE_ID = sh(returnStdout: true, script: "set +x; openstack --os-auth-url \"${env.OS_AUTH_URL}\" --insecure image show \"${params.RhcosImage}\" -f value -c id").trim()
+                        echo "Bastion image: ${BASTION_IMAGE_NAME} (${BASTION_IMAGE_ID})"
+                        echo "RHCOS image: ${RHCOS_IMAGE_NAME} (${RHCOS_IMAGE_ID})"
+
+                        currentBuild.description = "OCP ${OCP_RELEASE_TAG} · ${OPERATOR_NAME}"
+                        createTemplate(env.OS_AUTH_URL, env.MASTER_VCPUS, "${MASTER_MEMORY_MB}", env.MASTER_PROCESSORS, env.MASTER_TEMPLATE)
+                        createTemplate(env.OS_AUTH_URL, env.WORKER_VCPUS, "${WORKER_MEMORY_MB}", env.WORKER_PROCESSORS, env.WORKER_TEMPLATE)
+                        createTemplate(env.OS_AUTH_URL, env.BASTION_VCPUS, "${BASTION_MEMORY_MB}", env.BASTION_PROCESSORS, env.BASTION_TEMPLATE)
+                        createTemplate(env.OS_AUTH_URL, env.BOOTSTRAP_VCPUS, "${BOOTSTRAP_MEMORY_MB}", env.BOOTSTRAP_PROCESSORS, env.BOOTSTRAP_TEMPLATE)
+                    }
+                    catch (err) {
+                        echo 'Error ! Template preparation failed !'
+                        env.FAILED_STAGE = env.STAGE_NAME
+                        throw err
+                    }
+                }
+            }
+        }
+        stage('Initialize Environment') {
+            steps {
+                initializeEnvironment()
+            }
+        }
+        stage('Setup Terraform Plugin') {
+            steps {
+                setupTerraformPlugin()
+            }
+        }
+        stage('Deploy OCP Cluster') {
+            steps {
+                deployCluster()
+            }
+        }
+        stage('Setup Kubectl') {
+            steps {
+                setupKubeconfigOcp4()
+            }
+        }
+        stage('Validate CO status') {
+            steps {
+                archiveAllArtifacts("deploy/id_rsa")
+                validateCoStatus()
+            }
+        }
+        stage('Run OTE suite') {
+            steps {
+                script {
+                    ansiColor('xterm') {
+                        echo ""
+                    }
+                    try {
+                        sh '''
+                            cd ${WORKSPACE} && chmod +x ./scripts/operator/ote/run-ote-suite.sh && ./scripts/operator/ote/run-ote-suite.sh
+                        '''
+                    }
+                    catch (err) {
+                        echo 'OTE suite failed!'
+                        env.FAILED_STAGE = env.STAGE_NAME
+                        currentBuild.result = 'UNSTABLE'
+                    }
+                }
+            }
+        }
+        stage('Waiting to timeout') {
+            steps {
+                script {
+                    def minutes = TIMEOUT.toInteger()
+                    if (minutes > 0) {
+                        echo "HOLDING THE CLUSTER TEAR DOWN FOR ${minutes} MINUTES"
+                        sleep(time: minutes, unit: 'MINUTES')
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            archiveAllArtifacts("deploy/ote/ote-run.log", "deploy/ote/suites.txt", "deploy/vars.tfvars")
+            cleanupOcp4Cluster()
+            checkInfraError()
+            script {
+                env.MESSAGE = "OCP: `${env.BUILD}`, Operator: `${env.OPERATOR_NAME}`, Suite: `${env.OTE_SUITE ?: 'default'}`"
+                if (env.FAILED_STAGE) {
+                    env.MESSAGE = "${env.MESSAGE}, Failed stage: `${env.FAILED_STAGE}`"
+                }
+            }
+            //notifyBySlack(currentBuild.result, env.MESSAGE)
+            cleanWs()
+        }
+    }
+}
