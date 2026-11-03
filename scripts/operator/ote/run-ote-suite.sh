@@ -19,6 +19,9 @@ if [ -z "${line}" ]; then
     exit 1
 fi
 IMAGE=$(echo "${line}" | cut -d'|' -f2)
+if [ -n "${OPERATOR_IMAGE_OVERRIDE:-}" ]; then
+    IMAGE="${OPERATOR_IMAGE_OVERRIDE}"
+fi
 BINARY_PATH=$(echo "${line}" | cut -d'|' -f3)
 SUITES=$(echo "${line}" | cut -d'|' -f4)
 SUITE="${OTE_SUITE:-}"
@@ -41,6 +44,25 @@ ssh "${SSH_OPTS[@]}" root@"${BASTION_IP}" \
 set -euo pipefail
 export KUBECONFIG=/root/openstack-upi/auth/kubeconfig
 rm -rf /root/ote && mkdir -p /root/ote/results && cd /root/ote
+
+# Repo without a tag or digest: pick the newest main-branch build (Konflux tags it with the 40-char commit SHA)
+last_part="${IMAGE##*/}"
+if [[ "${IMAGE}" != *@* && "${last_part}" != *:* ]]; then
+    repo_path="${IMAGE#quay.io/}"
+    echo "Looking up the newest main build of ${IMAGE}"
+    tag=$(timeout 60 curl -sSf "https://quay.io/api/v1/repository/${repo_path}/tag/?onlyActiveTags=true&limit=100" | python3 -c '
+import json, re, sys
+tags = json.load(sys.stdin).get("tags", [])
+for t in tags:  # quay returns newest first
+    if t.get("is_manifest_list") and re.fullmatch(r"[0-9a-f]{40}", t["name"]):
+        print(t["name"]); break')
+    if [ -z "${tag}" ]; then
+        echo "No main-branch build tag found for ${IMAGE}"; exit 1
+    fi
+    IMAGE="${IMAGE}:${tag}"
+fi
+echo "Using image: ${IMAGE}"
+echo "${IMAGE}" > image.txt
 
 echo "Extracting ${BINARY_PATH} from the operator image"
 timeout 15m oc image extract "${IMAGE}" --path "${BINARY_PATH}:." \
@@ -130,7 +152,7 @@ tar czf results.tar.gz results
 exit 0
 EOF
 
-scp "${SSH_OPTS[@]}" root@"${BASTION_IP}":/root/ote/{junit.xml,summary.tsv,tests.txt,suites.txt,results.tar.gz,ote-failed-count} "${OUT_DIR}/" || true
+scp "${SSH_OPTS[@]}" root@"${BASTION_IP}":/root/ote/{junit.xml,summary.tsv,tests.txt,suites.txt,results.tar.gz,ote-failed-count,image.txt} "${OUT_DIR}/" || true
 failed=$(cat "${OUT_DIR}/ote-failed-count" 2>/dev/null || echo 1)
 echo "OTE run finished, ${failed} failed test(s)"
 [ "${failed}" -eq 0 ]
