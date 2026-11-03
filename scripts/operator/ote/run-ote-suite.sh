@@ -96,8 +96,12 @@ while IFS= read -r name; do
     i=$((i+1))
     echo ""
     echo "==> [${i}/${total}] ${name}"
+    for _ in $(seq 1 60); do
+        oc get ns --no-headers 2>/dev/null | grep -q " Terminating" || break
+        sleep 5
+    done
     start=$(date +%s)
-    ./"${BIN}" run-test --output=json "${name}" > "results/${i}.json" 2> "results/${i}.log" || true
+    ./"${BIN}" run-test --output=json "${name}" < /dev/null > "results/${i}.json" 2> "results/${i}.log" || true
     dur=$(( $(date +%s) - start ))
     result=$(python3 -c 'import json,sys
 try:
