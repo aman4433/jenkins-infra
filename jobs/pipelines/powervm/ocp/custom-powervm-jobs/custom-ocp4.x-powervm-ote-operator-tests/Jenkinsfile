@@ -15,7 +15,7 @@ pipeline {
         choice(description: 'Operator to test (must exist in scripts/operator/ote/operators.conf)', choices: ['kube-descheduler','compliance'], name: 'Operator')
         string(defaultValue: '', description: 'Optional operator image (repo:tag or repo@sha256:...). Empty = newest main build of the image in operators.conf', name: 'OperatorImage')
         string(defaultValue: '', description: 'Playbook operators only: catalog source index image. Empty = default redhat-operators catalog', name: 'IndexImage')
-        string(defaultValue: '1.22.4', description: 'Playbook operators only: Go version used to build the e2e tests', name: 'GoLangVersion')
+        string(defaultValue: '', description: 'Playbook operators only: Go version used to build the e2e tests. Empty = the version openshift-tests-private go.mod asks for', name: 'GoLangVersion')
         string(defaultValue: '', description: 'OTE operators only: suite to run. Empty = the default suite for the operator in operators.conf', name: 'Suite')
         string(defaultValue: '', description: 'Optional regex to run only matching tests from the suite, e.g. "metrics|ServiceMonitor". Empty = all tests', name: 'TestFilter')
         string(defaultValue: '30', description: 'Minutes to keep the cluster after the tests', name: 'KeepFor')
@@ -52,7 +52,7 @@ pipeline {
         BUILD = "${params.Build}"
         OPERATOR_NAME = "${params.Operator}"
         INDEX_IMAGE = "${params.IndexImage}"
-        GOLANG_TARBALL = "https://go.dev/dl/go${params.GoLangVersion}.linux-ppc64le.tar.gz"
+        GOLANG_VERSION = "${params.GoLangVersion}"
         OPERATOR_IMAGE_OVERRIDE = "${params.OperatorImage}"
         OTE_SUITE = "${params.Suite}"
         OTE_TEST_FILTER = "${params.TestFilter}"
@@ -73,6 +73,20 @@ pipeline {
                     env.MOUNT_ETCD_RAMDISK = "false"
                     env.INSTANCE_NAME = "ote-${env.OCP_RELEASE.replaceAll('\\.', '')}"
                     env.BASTION_MEMORY = "16"
+                }
+            }
+        }
+        stage('Preflight checks') {
+            steps {
+                script {
+                    // Fail in a minute on bad credentials, images or branches instead of after the cluster deploy
+                    def rc = sh(returnStatus: true, script: '''
+                        set +x; cd ${WORKSPACE} && chmod +x ./scripts/operator/ote/preflight.sh && ./scripts/operator/ote/preflight.sh
+                    ''')
+                    if (rc != 0) {
+                        env.FAILED_STAGE = env.STAGE_NAME
+                        error 'Preflight checks failed, see the log above. Nothing was deployed'
+                    }
                 }
             }
         }
