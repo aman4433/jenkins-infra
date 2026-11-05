@@ -12,9 +12,11 @@ pipeline {
     parameters {
         choice(description: 'OpenShift release', choices: ['4.22','4.23','5.0','4.21','4.20'], name: 'Release')
         string(defaultValue: '', description: 'Optional OCP build (quay image). Empty = latest stable build of the release, or latest build if there is no stable yet', name: 'Build')
-        choice(description: 'Operator to test (must exist in scripts/operator/ote/operators.conf)', choices: ['kube-descheduler'], name: 'Operator')
+        choice(description: 'Operator to test (must exist in scripts/operator/ote/operators.conf)', choices: ['kube-descheduler','compliance'], name: 'Operator')
         string(defaultValue: '', description: 'Optional operator image (repo:tag or repo@sha256:...). Empty = newest main build of the image in operators.conf', name: 'OperatorImage')
-        string(defaultValue: '', description: 'OTE suite to run. Empty = the default suite for the operator in operators.conf', name: 'Suite')
+        string(defaultValue: '', description: 'Playbook operators only: catalog source index image. Empty = default redhat-operators catalog', name: 'IndexImage')
+        string(defaultValue: '1.22.4', description: 'Playbook operators only: Go version used to build the e2e tests', name: 'GoLangVersion')
+        string(defaultValue: '', description: 'OTE operators only: suite to run. Empty = the default suite for the operator in operators.conf', name: 'Suite')
         string(defaultValue: '', description: 'Optional regex to run only matching tests from the suite, e.g. "metrics|ServiceMonitor". Empty = all tests', name: 'TestFilter')
         string(defaultValue: '30', description: 'Minutes to keep the cluster after the tests', name: 'KeepFor')
         string(defaultValue: 'ocp-qe-operators', description: 'PowerVC host group', name: 'HostGroup')
@@ -49,6 +51,8 @@ pipeline {
         OCP_RELEASE = "${params.Release}"
         BUILD = "${params.Build}"
         OPERATOR_NAME = "${params.Operator}"
+        INDEX_IMAGE = "${params.IndexImage}"
+        GOLANG_TARBALL = "https://go.dev/dl/go${params.GoLangVersion}.linux-ppc64le.tar.gz"
         OPERATOR_IMAGE_OVERRIDE = "${params.OperatorImage}"
         OTE_SUITE = "${params.Suite}"
         OTE_TEST_FILTER = "${params.TestFilter}"
@@ -152,21 +156,27 @@ pipeline {
                 validateCoStatus()
             }
         }
-        stage('Run OTE suite') {
+        stage('Run operator tests') {
             steps {
                 script {
                     ansiColor('xterm') {
                         echo ""
                     }
-                    try {
-                        sh '''
-                            cd ${WORKSPACE} && chmod +x ./scripts/operator/ote/run-ote-suite.sh && ./scripts/operator/ote/run-ote-suite.sh
-                        '''
-                    }
-                    catch (err) {
-                        echo 'OTE tests failed, see the Test Result tab'
+                    // Playbook-based operators run ocp4-playbooks-extras from the agent
+                    cloneRepo("https://github.com/ocp-power-automation/ocp4-playbooks-extras", "ocp4-playbooks-extras", "*/main")
+                    // 0 = passed, 2 = tests failed (UNSTABLE), other = automation failed (FAILURE). The cluster is kept either way.
+                    def rc = sh(returnStatus: true, script: '''
+                        cd ${WORKSPACE} && chmod +x ./scripts/operator/ote/run-operator-tests.sh && ./scripts/operator/ote/run-operator-tests.sh
+                    ''')
+                    if (rc == 2) {
+                        echo 'Operator tests failed, see the Test Result tab / archived results'
                         env.FAILED_STAGE = env.STAGE_NAME
                         currentBuild.result = 'UNSTABLE'
+                    }
+                    else if (rc != 0) {
+                        echo "Operator test automation failed (exit ${rc})"
+                        env.FAILED_STAGE = env.STAGE_NAME
+                        currentBuild.result = 'FAILURE'
                     }
                 }
             }
@@ -186,7 +196,7 @@ pipeline {
     post {
         always {
             junit(allowEmptyResults: true, testResults: 'deploy/ote/junit.xml')
-            archiveAllArtifacts("deploy/ote/image.txt", "deploy/ote/junit.xml", "deploy/ote/summary.tsv", "deploy/ote/tests.txt", "deploy/ote/suites.txt", "deploy/ote/results.tar.gz")
+            archiveAllArtifacts("deploy/operator-results/e2e-summary.txt", "deploy/operator-results/e2e-output.txt", "deploy/ote/image.txt", "deploy/ote/junit.xml", "deploy/ote/summary.tsv", "deploy/ote/tests.txt", "deploy/ote/suites.txt", "deploy/ote/results.tar.gz")
             cleanupOcp4Cluster()
             checkInfraError()
             script {
