@@ -36,10 +36,10 @@ fi
 mkdir -p "${OUT_DIR}"
 
 # Live e2e progress: follow the test output on the bastion and print one line per test result
-( sleep 60
-  ssh "${SSH_OPTS[@]}" root@"${BASTION_IP}" \
-      "tail -n0 -F ${RESULTS_DIR}/e2e-output.txt 2>/dev/null | grep --line-buffered -E '^(passed|failed|skipped):'" \
-      | sed -u 's/^/[e2e progress] /' ) &
+# ($! is the ssh pid, so killing it also ends the sed)
+ssh -n "${SSH_OPTS[@]}" root@"${BASTION_IP}" \
+    "tail -n0 -F ${RESULTS_DIR}/e2e-output.txt 2>/dev/null | grep --line-buffered -E '^(passed|failed|skipped):'" \
+    > >(sed -u 's/^/[e2e progress] /') 2>/dev/null &
 progress_pid=$!
 
 set +e
@@ -47,7 +47,6 @@ chmod +x "${WORKSPACE}/${SCRIPT}"
 "${WORKSPACE}/${SCRIPT}" 2>&1 | tee "${LOG}"
 rc=${PIPESTATUS[0]}
 set -e
-pkill -P "${progress_pid}" 2>/dev/null || true
 kill "${progress_pid}" 2>/dev/null || true
 
 scp "${SSH_OPTS[@]}" root@"${BASTION_IP}":"${RESULTS_DIR}"/e2e-*.txt "${OUT_DIR}/" 2>/dev/null || true

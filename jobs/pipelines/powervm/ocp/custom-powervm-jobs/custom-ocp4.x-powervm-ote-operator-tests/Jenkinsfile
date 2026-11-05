@@ -41,7 +41,7 @@ pipeline {
         TEMPLATE_FILE = ".${TARGET}.tfvars.template"
         POWERVS = false
         SCRIPT_DEPLOYMENT = false
-        WAIT_FOR_DEBUG = "1"
+        WAIT_FOR_DEBUG = "0"            // no extra hold on deploy failure, use KeepFor to debug a running cluster
         OPENSHIFT_POWERVC_GIT_TF_DEPLOY_BRANCH = "main"
         ENABLE_E2E_TEST = "false"
         ENABLE_SCALE_TEST = "false"
@@ -157,7 +157,11 @@ pipeline {
         }
         stage('Deploy OCP Cluster') {
             steps {
-                deployCluster()
+                // A normal deploy takes ~55-65 min; this leaves room for one redeploy. The shared deployCluster()
+                // retries up to 4 times (~35 min each), so a node that never boots would otherwise burn ~3 hours.
+                timeout(time: 110, unit: 'MINUTES') {
+                    deployCluster()
+                }
             }
         }
         stage('Setup Kubectl') {
