@@ -3,7 +3,7 @@
 # image or branch fails the build in a minute instead of after the deploy.
 #
 # Needs: WORKSPACE, OPERATOR_NAME, GITHUB_USER, GITHUB_TOKEN
-# Optional: OPERATOR_IMAGE_OVERRIDE, INDEX_IMAGE, GOLANG_VERSION
+# Optional: OPERATOR_IMAGE_OVERRIDE, INDEX_IMAGE, GOLANG_VERSION, PLAYBOOKS_REPO, PLAYBOOKS_BRANCH
 set -uo pipefail
 source "${WORKSPACE}/scripts/operator/ote/common.sh"
 
@@ -51,6 +51,13 @@ ote)
     ;;
 playbook)
     script=$(echo "${line}" | cut -d'|' -f3)
+    pb_repo="${PLAYBOOKS_REPO:-https://github.com/ocp-power-automation/ocp4-playbooks-extras}"
+    pb_branch="${PLAYBOOKS_BRANCH:-main}"
+    if timeout 60 git ls-remote --exit-code --heads "${pb_repo}" "${pb_branch}" >/dev/null 2>&1; then
+        ok "playbooks ${pb_repo} (${pb_branch}) found"
+    else
+        bad "playbooks branch ${pb_branch} not found in ${pb_repo}"
+    fi
     [ -f "${WORKSPACE}/${script}" ] && ok "script ${script} exists" || bad "script ${script} not found in the repo"
 
     # The playbook clones the e2e repo with user:token in the URL, so both must be plain values
