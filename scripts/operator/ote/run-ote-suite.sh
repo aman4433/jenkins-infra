@@ -18,12 +18,12 @@ if [ -z "${line}" ]; then
     echo "Operator '${OPERATOR_NAME}' not found in ${CONF}"
     exit 1
 fi
-IMAGE=$(echo "${line}" | cut -d'|' -f2)
+IMAGE=$(echo "${line}" | cut -d'|' -f3)
 if [ -n "${OPERATOR_IMAGE_OVERRIDE:-}" ]; then
     IMAGE="${OPERATOR_IMAGE_OVERRIDE}"
 fi
-BINARY_PATH=$(echo "${line}" | cut -d'|' -f3)
-SUITES=$(echo "${line}" | cut -d'|' -f4)
+BINARY_PATH=$(echo "${line}" | cut -d'|' -f4)
+SUITES=$(echo "${line}" | cut -d'|' -f5)
 SUITE="${OTE_SUITE:-}"
 if [ -z "${SUITE}" ]; then
     SUITE=$(echo "${SUITES}" | cut -d',' -f1)
@@ -159,4 +159,4 @@ EOF
 scp "${SSH_OPTS[@]}" root@"${BASTION_IP}":/root/ote/{junit.xml,summary.tsv,tests.txt,suites.txt,results.tar.gz,ote-failed-count,image.txt} "${OUT_DIR}/" || true
 failed=$(cat "${OUT_DIR}/ote-failed-count" 2>/dev/null || echo 1)
 echo "OTE run finished, ${failed} failed test(s)"
-[ "${failed}" -eq 0 ]
+[ "${failed}" -eq 0 ] || exit 2
