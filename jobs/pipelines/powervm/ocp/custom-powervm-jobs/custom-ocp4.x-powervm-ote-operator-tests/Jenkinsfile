@@ -16,6 +16,8 @@ pipeline {
         string(defaultValue: '', description: 'Optional operator image (repo:tag or repo@sha256:...). Empty = newest main build of the image in operators.conf', name: 'OperatorImage')
         string(defaultValue: '', description: 'Playbook operators only: catalog source index image. Empty = default redhat-operators catalog', name: 'IndexImage')
         string(defaultValue: '', description: 'Playbook operators only: Go version used to build the e2e tests. Empty = the version openshift-tests-private go.mod asks for', name: 'GoLangVersion')
+        string(defaultValue: 'https://github.com/ocp-power-automation/ocp4-playbooks-extras', description: 'Playbook operators only: ocp4-playbooks-extras repo (change to test a fork)', name: 'PlaybooksRepo')
+        string(defaultValue: 'main', description: 'Playbook operators only: ocp4-playbooks-extras branch', name: 'PlaybooksBranch')
         string(defaultValue: '', description: 'OTE operators only: suite to run. Empty = the default suite for the operator in operators.conf', name: 'Suite')
         string(defaultValue: '', description: 'Optional regex to run only matching tests from the suite, e.g. "metrics|ServiceMonitor". Empty = all tests', name: 'TestFilter')
         string(defaultValue: '30', description: 'Minutes to keep the cluster after the tests', name: 'KeepFor')
@@ -53,6 +55,8 @@ pipeline {
         OPERATOR_NAME = "${params.Operator}"
         INDEX_IMAGE = "${params.IndexImage}"
         GOLANG_VERSION = "${params.GoLangVersion}"
+        PLAYBOOKS_REPO = "${params.PlaybooksRepo}"
+        PLAYBOOKS_BRANCH = "${params.PlaybooksBranch}"
         OPERATOR_IMAGE_OVERRIDE = "${params.OperatorImage}"
         OTE_SUITE = "${params.Suite}"
         OTE_TEST_FILTER = "${params.TestFilter}"
@@ -181,7 +185,7 @@ pipeline {
                         echo ""
                     }
                     // Playbook-based operators run ocp4-playbooks-extras from the agent
-                    cloneRepo("https://github.com/ocp-power-automation/ocp4-playbooks-extras", "ocp4-playbooks-extras", "*/main")
+                    cloneRepo(env.PLAYBOOKS_REPO, "ocp4-playbooks-extras", "*/${env.PLAYBOOKS_BRANCH}")
                     // 0 = passed, 2 = tests failed (UNSTABLE), other = automation failed (FAILURE). The cluster is kept either way.
                     def rc = sh(returnStatus: true, script: '''
                         cd ${WORKSPACE} && chmod +x ./scripts/operator/ote/run-operator-tests.sh && ./scripts/operator/ote/run-operator-tests.sh
