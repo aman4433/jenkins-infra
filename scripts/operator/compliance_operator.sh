@@ -7,8 +7,8 @@ cp examples/ocp_compliance_vars.yaml ocp_compliance_vars.yaml
 sed -i "s|compliance_enabled:.*$|compliance_enabled: true|g" ocp_compliance_vars.yaml
 sed -i "s|compliance_catalogsource_image:.*$|compliance_catalogsource_image: ${COMPLIANCE_CATALOGSOURCE_IMAGE}|g" ocp_compliance_vars.yaml
 sed -i "s|compliance_e2e:.*$|compliance_e2e: true|g" ocp_compliance_vars.yaml
-sed -i "s|compliance_e2e_github_repo:.*$|compliance_e2e_github_repo: https://github.com/openshift/openshift-tests-private.git|g" ocp_compliance_vars.yaml
-sed -i "s|compliance_e2e_github_branch:.*$|compliance_e2e_github_branch: master|g" ocp_compliance_vars.yaml
+sed -i "s|compliance_e2e_github_repo:.*$|compliance_e2e_github_repo: https://github.com/${E2E_TESTS_REPO:-openshift/openshift-tests-private}.git|g" ocp_compliance_vars.yaml
+sed -i "s|compliance_e2e_github_branch:.*$|compliance_e2e_github_branch: ${E2E_TESTS_BRANCH:-main}|g" ocp_compliance_vars.yaml
 sed -i "s|compliance_github_username:.*$|compliance_github_username: ${GITHUB_USER}|g" ocp_compliance_vars.yaml
 sed -i "s|compliance_github_token:.*$|compliance_github_token: ${GITHUB_TOKEN}|g" ocp_compliance_vars.yaml
 sed -i "s|compliance_go_tarball:.*$|compliance_go_tarball: ${GOLANG_TARBALL}|g" ocp_compliance_vars.yaml
