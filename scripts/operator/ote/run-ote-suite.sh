@@ -7,7 +7,7 @@
 # Optional: OTE_SUITE (default: first suite in operators.conf), OTE_TEST_FILTER (regex on test names)
 set -euo pipefail
 
-CONF="${WORKSPACE}/scripts/operator/ote/operators.conf"
+source "${WORKSPACE}/scripts/operator/ote/common.sh"
 KEY="${WORKSPACE}/deploy/id_rsa"
 PULL_SECRET_FILE="${WORKSPACE}/deploy/data/pull-secret.txt"
 OUT_DIR="${WORKSPACE}/deploy/ote"
@@ -40,7 +40,7 @@ mkdir -p "${OUT_DIR}"
 scp "${SSH_OPTS[@]}" "${PULL_SECRET_FILE}" root@"${BASTION_IP}":/root/ote-pull-secret.txt
 
 ssh "${SSH_OPTS[@]}" root@"${BASTION_IP}" \
-    IMAGE="'${IMAGE}'" BINARY_PATH="'${BINARY_PATH}'" SUITE="'${SUITE}'" FILTER="'${FILTER}'" bash -s <<'EOF'
+    QUAY_API="'${QUAY_API}'" IMAGE="'${IMAGE}'" BINARY_PATH="'${BINARY_PATH}'" SUITE="'${SUITE}'" FILTER="'${FILTER}'" bash -s <<'EOF'
 set -euo pipefail
 export KUBECONFIG=/root/openstack-upi/auth/kubeconfig
 rm -rf /root/ote && mkdir -p /root/ote/results && cd /root/ote
@@ -50,7 +50,7 @@ last_part="${IMAGE##*/}"
 if [[ "${IMAGE}" != *@* && "${last_part}" != *:* ]]; then
     repo_path="${IMAGE#quay.io/}"
     echo "Looking up the newest main build of ${IMAGE}"
-    tag=$(timeout 60 curl -sSf "https://quay.io/api/v1/repository/${repo_path}/tag/?onlyActiveTags=true&limit=100" | python3 -c '
+    tag=$(timeout 60 curl -sSf "${QUAY_API}/${repo_path}/tag/?onlyActiveTags=true&limit=100" | python3 -c '
 import json, re, sys
 tags = json.load(sys.stdin).get("tags", [])
 for t in tags:  # quay returns newest first

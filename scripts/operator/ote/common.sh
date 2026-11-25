@@ -1,6 +1,8 @@
 # Shared helpers for the operator test scripts. Source it, don't run it.
 
 CONF="${WORKSPACE}/scripts/operator/ote/operators.conf"
+QUAY_API="https://quay.io/api/v1/repository"
+NET_TIMEOUT=30      # seconds for each network call (curl, git ls-remote)
 
 # Repo/branch the playbook roles build the e2e tests from
 export E2E_TESTS_REPO="${E2E_TESTS_REPO:-openshift/openshift-tests-private}"
@@ -13,7 +15,7 @@ conf_line() {
 
 # GitHub API GET. Prints the HTTP code; body goes to $2 (default /dev/null)
 gh_get() {
-    curl -sS -o "${2:-/dev/null}" -w '%{http_code}' --max-time 30 \
+    curl -sS -o "${2:-/dev/null}" -w '%{http_code}' --max-time "${NET_TIMEOUT}" \
         -H "Authorization: token ${GITHUB_TOKEN:-}" -H "Accept: application/vnd.github.raw" \
         "https://api.github.com/$1" 2>/dev/null || true
 }
