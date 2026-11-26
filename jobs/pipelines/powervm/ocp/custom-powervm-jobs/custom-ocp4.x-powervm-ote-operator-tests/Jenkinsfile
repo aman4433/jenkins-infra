@@ -20,7 +20,8 @@ pipeline {
         string(defaultValue: 'main', description: 'Playbook operators only: ocp4-playbooks-extras branch', name: 'PlaybooksBranch')
         string(defaultValue: '', description: 'OTE operators only: suite to run. Empty = the default suite for the operator in operators.conf', name: 'Suite')
         string(defaultValue: '', description: 'Optional regex to run only matching tests from the suite, e.g. "metrics|ServiceMonitor". Empty = all tests', name: 'TestFilter')
-        string(defaultValue: '30', description: 'Minutes to keep the cluster after the tests', name: 'KeepFor')
+        string(defaultValue: '', description: 'Optional: bastion IP of an existing cluster (created with ocp4-upi-powervm). If set, no cluster is deployed or destroyed and the tests run on that cluster. The bastion must have the job\'s public key, see scripts/operator/ote/README.md', name: 'BastionIP')
+        string(defaultValue: '30', description: 'Minutes to keep the cluster after the tests (fresh cluster only)', name: 'KeepFor')
         string(defaultValue: 'ocp-qe-operators', description: 'PowerVC host group', name: 'HostGroup')
         string(defaultValue: 'cicd-rhel9.8-2026-08-11-ppc64le', description: 'PowerVC image name for the bastion', name: 'BastionImage')
         string(defaultValue: 'cicd-rhcos-9-8-20260520-0-ppc64le-powervs', description: 'PowerVC image name for RHCOS nodes', name: 'RhcosImage')
@@ -61,6 +62,7 @@ pipeline {
         OTE_SUITE = "${params.Suite}"
         OTE_TEST_FILTER = "${params.TestFilter}"
         TIMEOUT = "${params.KeepFor}"
+        EXISTING_BASTION_IP = "${(params.BastionIP ?: '').trim()}"
         CONFIG_TYPE = "min"
     }
     stages {
@@ -80,6 +82,20 @@ pipeline {
                 }
             }
         }
+        stage('Use existing cluster') {
+            when { expression { (params.BastionIP ?: '').trim() != '' } }
+            steps {
+                script {
+                    env.BASTION_IP = env.EXISTING_BASTION_IP
+                    pullSecret()
+                    // Scripts expect the bastion key at deploy/id_rsa, same as for a fresh cluster
+                    withCredentials([sshUserPrivateKey(credentialsId: 'OTE_BASTION_SSH_KEY', keyFileVariable: 'KEYFILE')]) {
+                        sh 'set +x; cp "$KEYFILE" ${WORKSPACE}/deploy/id_rsa && chmod 600 ${WORKSPACE}/deploy/id_rsa'
+                    }
+                    currentBuild.description = "existing cluster ${env.BASTION_IP} · ${OPERATOR_NAME}"
+                }
+            }
+        }
         stage('Preflight checks') {
             steps {
                 script {
@@ -95,6 +111,7 @@ pipeline {
             }
         }
         stage('pull artifact') {
+            when { expression { (params.BastionIP ?: '').trim() == '' } }
             steps {
                 script {
                     getArtifacts("mirror-openshift-release", "latest-${OCP_RELEASE}-build.txt")
@@ -103,6 +120,7 @@ pipeline {
             }
         }
         stage('Prepare Terraform Template') {
+            when { expression { (params.BastionIP ?: '').trim() == '' } }
             steps {
                 script {
                     ansiColor('xterm') {
@@ -150,16 +168,19 @@ pipeline {
             }
         }
         stage('Initialize Environment') {
+            when { expression { (params.BastionIP ?: '').trim() == '' } }
             steps {
                 initializeEnvironment()
             }
         }
         stage('Setup Terraform Plugin') {
+            when { expression { (params.BastionIP ?: '').trim() == '' } }
             steps {
                 setupTerraformPlugin()
             }
         }
         stage('Deploy OCP Cluster') {
+            when { expression { (params.BastionIP ?: '').trim() == '' } }
             steps {
                 // A normal deploy takes ~55-65 min; this leaves room for one redeploy. The shared deployCluster()
                 // retries up to 4 times (~35 min each), so a node that never boots would otherwise burn ~3 hours.
@@ -169,11 +190,13 @@ pipeline {
             }
         }
         stage('Setup Kubectl') {
+            when { expression { (params.BastionIP ?: '').trim() == '' } }
             steps {
                 setupKubeconfigOcp4()
             }
         }
         stage('Validate CO status') {
+            when { expression { (params.BastionIP ?: '').trim() == '' } }
             steps {
                 validateCoStatus()
             }
@@ -204,6 +227,7 @@ pipeline {
             }
         }
         stage('Waiting to timeout') {
+            when { expression { (params.BastionIP ?: '').trim() == '' } }
             steps {
                 script {
                     def minutes = TIMEOUT.toInteger()
@@ -219,10 +243,14 @@ pipeline {
         always {
             junit(allowEmptyResults: true, testResults: 'deploy/ote/junit.xml')
             archiveAllArtifacts("deploy/operator-results/e2e-summary.txt", "deploy/operator-results/e2e-output.txt", "deploy/ote/image.txt", "deploy/ote/junit.xml", "deploy/ote/summary.tsv", "deploy/ote/tests.txt", "deploy/ote/suites.txt", "deploy/ote/results.tar.gz")
-            cleanupOcp4Cluster()
+            script {
+                if (!env.EXISTING_BASTION_IP) {
+                    cleanupOcp4Cluster()
+                }
+            }
             checkInfraError()
             script {
-                env.MESSAGE = "OCP: `${env.BUILD}`, Operator: `${env.OPERATOR_NAME}`, Suite: `${env.OTE_SUITE ?: 'default'}`"
+                env.MESSAGE = "OCP: `${env.EXISTING_BASTION_IP ? 'existing cluster ' + env.EXISTING_BASTION_IP : env.BUILD}`, Operator: `${env.OPERATOR_NAME}`, Suite: `${env.OTE_SUITE ?: 'default'}`"
                 if (env.FAILED_STAGE) {
                     env.MESSAGE = "${env.MESSAGE}, Failed stage: `${env.FAILED_STAGE}`"
                 }

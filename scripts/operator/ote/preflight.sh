@@ -3,6 +3,7 @@
 # image or branch fails the build in a minute instead of after the deploy.
 #
 # Needs: WORKSPACE, OPERATOR_NAME, GITHUB_USER, GITHUB_TOKEN
+# Existing cluster: EXISTING_BASTION_IP (key at ${WORKSPACE}/deploy/id_rsa)
 # Optional: OPERATOR_IMAGE_OVERRIDE, INDEX_IMAGE, GOLANG_VERSION, PLAYBOOKS_REPO, PLAYBOOKS_BRANCH
 set -uo pipefail
 source "${WORKSPACE}/scripts/operator/ote/common.sh"
@@ -13,6 +14,26 @@ fail() { echo "  [FAIL] $*"; errors=$((errors+1)); }
 warn() { echo "  [warn] $*"; }   # could not check (network), not a failure
 
 echo "Preflight checks for ${OPERATOR_NAME}"
+
+# Existing cluster: the job must be able to log in to the bastion and use the cluster from there
+if [ -n "${EXISTING_BASTION_IP:-}" ]; then
+    ssh_cmd=(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout="${NET_TIMEOUT}"
+             -i "${WORKSPACE}/deploy/id_rsa" root@"${EXISTING_BASTION_IP}")
+    if ! "${ssh_cmd[@]}" true >/dev/null 2>&1; then
+        fail "cannot ssh to root@${EXISTING_BASTION_IP}, add the job's public key to /root/.ssh/authorized_keys (see README)"
+        exit 1
+    fi
+    info "ssh to bastion ${EXISTING_BASTION_IP} works"
+    "${ssh_cmd[@]}" 'test -f /root/openstack-upi/auth/kubeconfig' \
+        && info "kubeconfig found at /root/openstack-upi/auth/kubeconfig" \
+        || fail "no /root/openstack-upi/auth/kubeconfig on the bastion (was the cluster created with ocp4-upi-powervm?)"
+    "${ssh_cmd[@]}" 'test -f /root/.kube/config' \
+        && info "/root/.kube/config found" \
+        || fail "no /root/.kube/config on the bastion (playbooks use it)"
+    "${ssh_cmd[@]}" 'KUBECONFIG=/root/openstack-upi/auth/kubeconfig timeout 30 oc whoami' >/dev/null 2>&1 \
+        && info "cluster API reachable from the bastion" \
+        || fail "oc cannot reach the cluster from the bastion"
+fi
 
 line=$(conf_line)
 if [ -z "${line}" ]; then

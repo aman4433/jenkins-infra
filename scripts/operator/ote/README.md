@@ -26,10 +26,26 @@ Build with Parameters, pick `Release` and `Operator`, leave the rest as default.
 | `IndexImage` | playbook | catalog source index image. Empty = `redhat-operators` |
 | `PlaybooksRepo`, `PlaybooksBranch` | playbook | point to your fork to test a playbook change before it is merged |
 | `KeepFor` | all | minutes to keep the cluster after the tests (for debugging) |
+| `BastionIP` | all | run on an existing cluster instead of deploying one, see below |
 
 Build result: green = all passed, yellow (UNSTABLE) = some tests failed, red = the automation itself failed
 (the console says which step). A "Preflight checks" stage runs first and fails in about a minute on bad
 credentials, a missing image or a missing branch, before anything is deployed.
+
+## Using an existing cluster
+
+To skip the ~1h deploy (e.g. while onboarding an operator), run the tests on a cluster you already have.
+The cluster must be created with [ocp4-upi-powervm](https://github.com/ocp-power-automation/ocp4-upi-powervm).
+
+1. Add the job's public key to the bastion once:
+   ```
+   echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVv2omMHWoHmvLmPbbRUP19TEEr1QHgLO72pIxUtOy7 ote-operator-tests' >> /root/.ssh/authorized_keys
+   ```
+2. Run the job with `BastionIP` set to the bastion IP.
+
+The job does not deploy or destroy anything in this mode, and `Release`, `Build` and `KeepFor` are ignored.
+Preflight checks that it can ssh in and that `oc` works on the bastion. Don't run two jobs against
+the same cluster at the same time.
 
 ## Adding an operator
 
